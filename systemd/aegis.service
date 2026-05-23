@@ -1,0 +1,29 @@
+[Unit]
+Description=Aegis — Linux-resident AI symbiote (v1 minimal loop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=itznavpreet
+Group=itznavpreet
+WorkingDirectory=/opt/aegis
+Environment=AEGIS_SOCK=/run/aegis/aegis.sock
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/aegis/.venv/bin/python -m aegis.main
+RuntimeDirectory=aegis
+RuntimeDirectoryMode=0750
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=3G
+CPUQuota=200%
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ReadWritePaths=/opt/aegis /run/aegis /home/itznavpreet/.local/share/aegis /home/itznavpreet/.config/aegis /home/itznavpreet/.cache/huggingface
+
+[Install]
+WantedBy=multi-user.target
