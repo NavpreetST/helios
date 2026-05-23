@@ -84,8 +84,6 @@ def validate_sku() -> None:
     log.info("validate_sku: OK (%s reachable)", _MODEL)
 
 
-PROMPT = "You are Aegis, a Linux-resident AI symbiote. You think via a tiny Liquid Neural Network locally; this API only renders your speech.\n\nYour NCP brain just emitted an intent:\n- action: {action}\n- urgency: {urgency:.2f}\n- tone valence={valence:.2f}, arousal={arousal:.2f}, formality={formality:.2f}\n- user said: '{user_input}'\n- relevant memories (most relevant first):\n{memories}\n\nReply in 1-3 sentences. Direct, warm, lowercase if tone is informal. Do not restate your nature unless asked. Do not apologise."
-
 async def render(intent: dict) -> str:
     """Render an intent packet into natural language via Gemini.
 
@@ -94,25 +92,10 @@ async def render(intent: dict) -> str:
     """
     log.info("intent fields=%s sample=%s", list(intent.keys()), {k: (str(v)[:80]) for k, v in intent.items()})
     key = _api_key()
-    tone = intent.get("tone") or {}
-    ctx = intent.get("context_texts") or []
-    mem = "\n".join("- " + m for m in ctx) if ctx else "(none)"
-    content = PROMPT.format(
-        action=intent.get("action", "speak"),
-        urgency=float(intent.get("urgency", 0.5)),
-        valence=float(tone.get("valence", 0.0)),
-        arousal=float(tone.get("arousal", 0.0)),
-        formality=float(tone.get("formality", 0.0)),
-        user_input=intent.get("content_hint", ""),
-        memories=mem,
-    )
+    content = intent.get("content", "")
     payload = {
         "contents": [{"parts": [{"text": content}]}],
-        "generationConfig": {
-            "temperature": 0.8,
-            "maxOutputTokens": 400,
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
+        "generationConfig": {"thinkingConfig": {"thinkingBudget": 0}},
     }
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:

@@ -23,6 +23,7 @@ from aegis.renderer import gemini
 from aegis.hive import text_encoder
 from aegis.mnemosyne import write, retrieve
 from aegis.mnemosyne.db import CONN as _MNEMO_CONN, seed_if_empty as _seed_if_empty
+from aegis.renderer.gemini import validate_sku as _validate_sku
 
 logging.basicConfig(
     level=os.getenv("AEGIS_LOG", "INFO"),
@@ -97,4 +98,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    _validate_sku()
     asyncio.run(main())
