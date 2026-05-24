@@ -73,7 +73,7 @@ def validate_sku() -> None:
         )
         sys.exit(1)
     if r.status_code != 200:
-        log.error("SKU validation FAILED: %s returned %d. Refusing to start.", model_url, r.status_code)
+        log.error("SKU validation FAILED: %s returned %d. Refusing to start.", _MODEL_INFO_URL, r.status_code)
         sys.exit(1)
         log.warning(
             "validate_sku: non-200 status=%d body=%s — continuing, will surface at call time",

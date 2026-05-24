@@ -1,2 +1,0 @@
-
-source /opt/aegis/.venv/bin/activate

@@ -1,6 +1,37 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# Secrets
 .env
 secrets.env
+*.key
+*.pem
+
+# Local config & runtime state (use ~/.local/share/aegis or /var/lib/aegis)
+.config/
+gemini_usage.json
+turns.jsonl
+inhibitory_gate.jsonl
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Editor / sed backups
+*.bak
+*.bak-*
+*~
+.#*
+*.swp
+*.swo
+.DS_Store
+
+# uv
+.uv-cache/
+uv-receipt.json
