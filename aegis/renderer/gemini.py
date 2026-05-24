@@ -23,6 +23,7 @@ import os
 import sys
 
 import httpx
+from aegis.renderer import _quota
 
 from aegis.nexus.bus import BUS
 from aegis.renderer import QuotaExhausted, TransientError
@@ -115,6 +116,7 @@ async def render(intent: dict) -> str:
         },
     }
     try:
+        _quota.reserve()  # Block 1.1
         async with httpx.AsyncClient(timeout=15.0) as client:
             log.info("gemini req: content_len=%d preview=%r payload_keys=%s", len(content), content[:200], list(payload.keys()))
             r = await client.post(
