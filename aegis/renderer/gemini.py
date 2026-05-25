@@ -27,7 +27,6 @@ from aegis.renderer import _quota
 
 from aegis.nexus.bus import BUS
 from aegis.renderer import QuotaExhausted, TransientError
-from aegis.renderer import fallback
 
 log = logging.getLogger(__name__)
 
@@ -155,19 +154,3 @@ async def render(intent: dict) -> str:
         ) from e
     _quota.record_success()
     return text
-async def run() -> None:
-    """Transitional task: subscribe to intent.packet, render, publish action.speak.
-    Block 4 will replace this with a dispatcher-owned task that walks CHAIN."""
-    q = BUS.subscribe("intent.packet")
-    while True:
-        msg = await q.get()
-        intent = msg.payload  # unwrap Message → dict (bus.py Message dataclass; 3.5.1-FIX 2026-05-23 20:18 CET)
-        if intent.get("action") != "speak":
-            log.info("gemini.run: intent skipped: action=%s", intent.get("action"))
-            continue
-        try:
-            text = await render(intent)
-        except (QuotaExhausted, TransientError) as e:
-            log.warning("gemini.run: falling back to template — %s", e)
-            text = await fallback.render(intent)
-        await BUS.publish("action.speak", {"text": text})  # 3.5.1-FIX2: dict shape per mnemosyne.write.consume_speak contract (2026-05-23 20:28 CET)
