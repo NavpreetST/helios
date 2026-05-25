@@ -48,12 +48,18 @@ def _api_key() -> str:
 
 
 def validate_sku() -> None:
-    """Boot-time SKU + key validation. sys.exit(1) on config error."""
+    """Boot-time SKU + key validation.
+
+    Fatal only when the key is missing or explicitly unauthorized/not found.
+    Other provider/model-info failures warn and continue; runtime calls surface
+    through gemini.render() and the dispatcher fallback chain.
+    """
     try:
         key = _api_key()
     except RuntimeError as e:
         log.error("validate_sku: %s", e)
         sys.exit(1)
+
     try:
         r = httpx.get(
             _MODEL_INFO_URL,
@@ -66,6 +72,7 @@ def validate_sku() -> None:
             e,
         )
         return
+
     if r.status_code in (401, 403, 404):
         log.error(
             "validate_sku: FAILED status=%d body=%s — wrong SKU or bad key. Refusing to start.",
@@ -73,15 +80,15 @@ def validate_sku() -> None:
             r.text[:200],
         )
         sys.exit(1)
+
     if r.status_code != 200:
-        log.error("SKU validation FAILED: %s returned %d. Refusing to start.", _MODEL_INFO_URL, r.status_code)
-        sys.exit(1)
         log.warning(
             "validate_sku: non-200 status=%d body=%s — continuing, will surface at call time",
             r.status_code,
             r.text[:200],
         )
         return
+
     log.info("validate_sku: OK (%s reachable)", _MODEL)
 
 
