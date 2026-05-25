@@ -19,7 +19,7 @@ if _env.exists():
 from aegis.nexus.bus import BUS
 from aegis.nexus import clock, neurobus
 from aegis.brain import ncp
-from aegis.renderer import gemini
+from aegis.renderer import dispatcher
 from aegis.hive import text_encoder
 from aegis.mnemosyne import write, retrieve
 from aegis.mnemosyne.db import CONN as _MNEMO_CONN, seed_if_empty as _seed_if_empty
@@ -83,7 +83,7 @@ async def main() -> None:
         asyncio.create_task(clock.run(hz=1.0)),
         asyncio.create_task(neurobus.run()),
         asyncio.create_task(ncp.run()),
-        asyncio.create_task(gemini.run()),
+        asyncio.create_task(dispatcher.run()),
         asyncio.create_task(write.run()),
         asyncio.create_task(retrieve.run()),
         asyncio.create_task(serve_unix_socket()),
