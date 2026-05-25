@@ -1,17 +1,20 @@
 """Dispatcher — renderer chain owner (Block 4).
 
-Owns the renderer fallback CHAIN at module level.
-Subscribes to intent.packet, walks each adapter, publishes action.speak.
+Replaces gemini.run()'s transitional BUS task. Owns CHAIN at module level,
+subscribes to intent.packet, walks each adapter, publishes action.speak.
 
-This replaces gemini.run() as the BUS task. Individual provider modules expose
-async render(intent: dict) -> str and raise renderer-tier exceptions when they
-cannot produce usable speech.
+Cutover for main.py (aegis/main.py):
+    # BEFORE (transitional — delete these lines):
+    from aegis.renderer import gemini
+    tasks.append(asyncio.create_task(gemini.run()))
 
-Initial chain:
-    Gemini -> Template
+    # AFTER (dispatcher owns the loop):
+    from aegis.renderer import dispatcher
+    tasks.append(asyncio.create_task(dispatcher.run()))
 
-Block 5 will insert Groq:
-    Gemini -> Groq -> Template
+Once the cutover ships and smoke passes:
+    - Delete gemini.run() from aegis/renderer/gemini.py.
+    - Remove `from aegis.renderer import fallback` from gemini.py.
 """
 
 from __future__ import annotations
@@ -20,40 +23,36 @@ import logging
 
 from aegis.nexus.bus import BUS
 from aegis.renderer import QuotaExhausted, TransientError
-from aegis.renderer import fallback, gemini
+from aegis.renderer import gemini, fallback, groq
 
 log = logging.getLogger(__name__)
 
 
 class Gemini:
     """Thin wrapper around gemini.render()."""
-
     name = "gemini"
 
     async def render(self, intent: dict) -> str:
         return await gemini.render(intent)
 
 
+class Groq:
+    """Thin wrapper around groq.render()."""
+    name = "groq"
+
+    async def render(self, intent: dict) -> str:
+        return await groq.render(intent)
+
+
 class Template:
     """Thin wrapper around fallback.render(). Never raises — chain terminator."""
-
     name = "template"
 
     async def render(self, intent: dict) -> str:
         return await fallback.render(intent)
 
 
-# Block 5 inserts Groq before Template:
-#   from aegis.renderer import groq
-#
-#   class Groq:
-#       name = "groq"
-#       async def render(self, intent: dict) -> str:
-#           return await groq.render(intent)
-#
-#   CHAIN = [Gemini, Groq, Template]
-
-CHAIN = [Gemini, Template]
+CHAIN = [Gemini, Groq, Template]
 
 
 async def run() -> None:
@@ -80,7 +79,9 @@ async def _render_with_chain(intent: dict) -> str:
             if text:
                 log.info("dispatcher: rendered via %s", adapter.name)
                 return text
-            log.warning("dispatcher: %s returned empty string, advancing", adapter.name)
+            log.warning(
+                "dispatcher: %s returned empty string, advancing", adapter.name
+            )
         except QuotaExhausted as e:
             log.warning("dispatcher: %s quota exhausted — %s", adapter.name, e)
             continue
@@ -88,10 +89,10 @@ async def _render_with_chain(intent: dict) -> str:
             log.warning("dispatcher: %s transient error — %s", adapter.name, e)
             continue
 
-    # Unreachable while Template remains the final adapter.
     log.error("dispatcher: all adapters exhausted — returning empty string")
     return ""
 
 
-# TODO(test): mock gemini.render to raise QuotaExhausted and verify Template
-# is reached and action.speak is published with template text.
+# TODO(test): mock gemini.render to raise QuotaExhausted on the first call
+# and TransientError on the second; verify fallback.render is reached and
+# action.speak is published with the template text on the BUS.
