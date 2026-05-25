@@ -1,20 +1,17 @@
 """Dispatcher — renderer chain owner (Block 4).
 
-Replaces gemini.run()'s transitional BUS task. Owns CHAIN at module level,
-subscribes to intent.packet, walks each adapter, publishes action.speak.
+Owns the renderer fallback CHAIN at module level.
+Subscribes to intent.packet, walks each adapter, publishes action.speak.
 
-Cutover for main.py (aegis/main.py):
-    # BEFORE (transitional — delete these lines):
-    from aegis.renderer import gemini
-    tasks.append(asyncio.create_task(gemini.run()))
+This replaces gemini.run() as the BUS task. Individual provider modules expose
+async render(intent: dict) -> str and raise renderer-tier exceptions when they
+cannot produce usable speech.
 
-    # AFTER (dispatcher owns the loop):
-    from aegis.renderer import dispatcher
-    tasks.append(asyncio.create_task(dispatcher.run()))
+Initial chain:
+    Gemini -> Template
 
-Once the cutover ships and smoke passes:
-    - Delete gemini.run() from aegis/renderer/gemini.py.
-    - Remove `from aegis.renderer import fallback` from gemini.py.
+Block 5 will insert Groq:
+    Gemini -> Groq -> Template
 """
 
 from __future__ import annotations
@@ -23,21 +20,14 @@ import logging
 
 from aegis.nexus.bus import BUS
 from aegis.renderer import QuotaExhausted, TransientError
-from aegis.renderer import gemini, fallback
+from aegis.renderer import fallback, gemini
 
 log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Adapter wrappers
-# ---------------------------------------------------------------------------
-# Each adapter is a class with an async render(intent: dict) -> str method
-# matching the existing gemini.render() / fallback.render() signatures.
-# gemini.render() may raise QuotaExhausted or TransientError;
-# fallback.render() never raises.
 
 
 class Gemini:
     """Thin wrapper around gemini.render()."""
+
     name = "gemini"
 
     async def render(self, intent: dict) -> str:
@@ -46,40 +36,32 @@ class Gemini:
 
 class Template:
     """Thin wrapper around fallback.render(). Never raises — chain terminator."""
+
     name = "template"
 
     async def render(self, intent: dict) -> str:
         return await fallback.render(intent)
 
 
-# TODO(dispatcher-cutover): When Block 5 lands, add Groq adapter here:
+# Block 5 inserts Groq before Template:
+#   from aegis.renderer import groq
+#
 #   class Groq:
 #       name = "groq"
-#       async def render(self, intent: dict) -> str: ...
-# Then insert it into CHAIN before Template:
+#       async def render(self, intent: dict) -> str:
+#           return await groq.render(intent)
+#
 #   CHAIN = [Gemini, Groq, Template]
-
-# ---------------------------------------------------------------------------
-# Chain
-# ---------------------------------------------------------------------------
 
 CHAIN = [Gemini, Template]
 
-# ---------------------------------------------------------------------------
-# BUS task (replaces gemini.run())
-# ---------------------------------------------------------------------------
-
 
 async def run() -> None:
-    """Subscribe to intent.packet, walk CHAIN, publish action.speak.
-
-    Replaces gemini.run(). Only processes action='speak' intents
-    (matching existing behaviour — non-speak intents are logged and skipped).
-    """
+    """Subscribe to intent.packet, walk CHAIN, publish action.speak."""
     q = BUS.subscribe("intent.packet")
     while True:
         msg = await q.get()
-        intent = msg.payload  # Message.payload is the intent dict (3.5.1-FIX)
+        intent = msg.payload
 
         if intent.get("action") != "speak":
             log.info("dispatcher: intent skipped: action=%s", intent.get("action"))
@@ -90,12 +72,7 @@ async def run() -> None:
 
 
 async def _render_with_chain(intent: dict) -> str:
-    """Try each adapter class in CHAIN order.
-
-    Advances on QuotaExhausted (quota wall — don't retry until next window)
-    and TransientError (5xx / network / timeout — may succeed next tick).
-    Template is the always-last terminator that never raises.
-    """
+    """Try each adapter class in CHAIN order."""
     for adapter_cls in CHAIN:
         adapter = adapter_cls()
         try:
@@ -103,9 +80,7 @@ async def _render_with_chain(intent: dict) -> str:
             if text:
                 log.info("dispatcher: rendered via %s", adapter.name)
                 return text
-            log.warning(
-                "dispatcher: %s returned empty string, advancing", adapter.name
-            )
+            log.warning("dispatcher: %s returned empty string, advancing", adapter.name)
         except QuotaExhausted as e:
             log.warning("dispatcher: %s quota exhausted — %s", adapter.name, e)
             continue
@@ -113,11 +88,10 @@ async def _render_with_chain(intent: dict) -> str:
             log.warning("dispatcher: %s transient error — %s", adapter.name, e)
             continue
 
-    # Unreachable — Template never raises and always returns a string.
+    # Unreachable while Template remains the final adapter.
     log.error("dispatcher: all adapters exhausted — returning empty string")
     return ""
 
 
-# TODO(test): mock gemini.render to raise QuotaExhausted on the first call
-# and TransientError on the second; verify fallback.render is reached and
-# action.speak is published with the template text on the BUS.
+# TODO(test): mock gemini.render to raise QuotaExhausted and verify Template
+# is reached and action.speak is published with template text.
