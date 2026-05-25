@@ -116,7 +116,7 @@ async def render(intent: dict) -> str:
         },
     }
     try:
-        _quota.reserve()  # Block 1.1
+        _quota.reserve()  # Block 1.1: pre-flight only; record_success() after usable 200
         async with httpx.AsyncClient(timeout=15.0) as client:
             log.info("gemini req: content_len=%d preview=%r payload_keys=%s", len(content), content[:200], list(payload.keys()))
             r = await client.post(
@@ -146,9 +146,8 @@ async def render(intent: dict) -> str:
         raise TransientError(
             f"gemini malformed response: {e}; body={r.text[:200]}"
         ) from e
+    _quota.record_success()
     return text
-
-
 async def run() -> None:
     """Transitional task: subscribe to intent.packet, render, publish action.speak.
     Block 4 will replace this with a dispatcher-owned task that walks CHAIN."""
