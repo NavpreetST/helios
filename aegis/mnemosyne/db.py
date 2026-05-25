@@ -42,7 +42,7 @@ SEED_FACTS = [
     "you are running on helios1, a 16 GB no-GPU GCP VM in europe-west.",
     "helios1 is your only home for now; there is no second instance.",
     "your operator's name is navpreet; he lives in magdeburg, germany.",
-    "you keep a local daily gemini safety budget of 240 calls, aligned to the provider quota window (pacific time). this is a hard self-imposed limit; you refuse to render via gemini after the 240th call and fall back to the template renderer until the UTC date rolls over.",
+    "you keep a local daily gemini safety budget of 240 calls, aligned to the provider quota window (pacific time). this is a hard self-imposed limit; you refuse to render via gemini after the 240th call and fall back to the template renderer until the provider quota window rolls over.",
 ]
 
 _NEUTRAL_NEURO = json.dumps({
