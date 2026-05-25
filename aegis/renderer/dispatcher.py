@@ -23,7 +23,7 @@ import logging
 import time
 
 from aegis.nexus.bus import BUS
-from aegis.renderer import QuotaExhausted, TransientError
+from aegis.renderer import QuotaExhausted, TransientError, RendererError
 from aegis.renderer import gemini, fallback, groq
 
 log = logging.getLogger(__name__)
@@ -110,17 +110,20 @@ async def _render_with_chain(intent: dict) -> dict:
             if not fallback_fired:
                 fallback_fired = True
             log.warning("dispatcher: %s returned empty string, advancing", adapter.name)
-        except QuotaExhausted as e:
+        except RendererError as e:
             if not fallback_fired:
                 fallback_fired = True
                 last_error_class = type(e).__name__
-            log.warning("dispatcher: %s quota exhausted", adapter.name)
+            if isinstance(e, QuotaExhausted):
+                log.warning("dispatcher: %s quota exhausted", adapter.name)
+            else:
+                log.warning("dispatcher: %s renderer error — %s", adapter.name, e)
             continue
-        except TransientError as e:
+        except Exception as e:
             if not fallback_fired:
                 fallback_fired = True
-                last_error_class = type(e).__name__
-            log.warning("dispatcher: %s transient error", adapter.name)
+                last_error_class = "unexpected"
+            log.warning("dispatcher: %s unexpected error — %s", adapter.name, e)
             continue
 
     render_ms = int((time.perf_counter() - t0) * 1000)
