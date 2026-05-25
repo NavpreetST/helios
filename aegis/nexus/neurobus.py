@@ -13,6 +13,9 @@ import asyncio
 import logging
 from dataclasses import dataclass, asdict
 from .bus import BUS
+from aegis.observability.paths import NEUROBUS_STATE_PATH, atomic_write_json
+from aegis.observability.paths import NEUROBUS_STATE_PATH, atomic_write_json
+from aegis.observability.paths import NEUROBUS_STATE_PATH, atomic_write_json
 
 log = logging.getLogger("nexus.neurobus")
 
@@ -62,6 +65,18 @@ async def run() -> None:
                 setattr(STATE, f, getattr(STATE, f) * rate)
             STATE.clamp()
             await BUS.publish("neurobus.state", asdict(STATE))
+            try:
+                atomic_write_json(NEUROBUS_STATE_PATH, {"updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), **asdict(STATE)})
+            except (OSError, ValueError) as e:
+                log.warning("neurobus: failed to write state snapshot — %s", e)
+            try:
+                atomic_write_json(NEUROBUS_STATE_PATH, {"updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), **asdict(STATE)})
+            except (OSError, ValueError) as e:
+                log.warning("neurobus: failed to write state snapshot — %s", e)
+            try:
+                atomic_write_json(NEUROBUS_STATE_PATH, {"updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), **asdict(STATE)})
+            except (OSError, ValueError):
+                pass
 
     async def on_sense() -> None:
         while True:

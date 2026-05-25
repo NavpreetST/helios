@@ -20,6 +20,7 @@ Once the cutover ships and smoke passes:
 from __future__ import annotations
 
 import logging
+import time
 
 from aegis.nexus.bus import BUS
 from aegis.renderer import QuotaExhausted, TransientError
@@ -66,31 +67,80 @@ async def run() -> None:
             log.info("dispatcher: intent skipped: action=%s", intent.get("action"))
             continue
 
-        text = await _render_with_chain(intent)
-        await BUS.publish("action.speak", {"text": text})
+        result = await _render_with_chain(intent)
+        await BUS.publish("action.speak", result)
 
 
-async def _render_with_chain(intent: dict) -> str:
-    """Try each adapter class in CHAIN order."""
+async def _render_with_chain(intent: dict) -> dict:
+    """Try each adapter class in CHAIN order.
+
+    Returns {"text": str, "provider": str, "fallback_fired": bool,
+             "error_class": str|None, "render_ms": int}.
+    Also calls record_provider_attempt() for renderer_state.json.
+    """
+    from aegis.observability.renderer_state import record_provider_attempt
+
+    t0 = time.perf_counter()
+    fallback_fired = False
+    last_error_class = None
+    chain_names = [a.name for a in [cls() for cls in CHAIN]]
     for adapter_cls in CHAIN:
         adapter = adapter_cls()
         try:
             text = await adapter.render(intent)
             if text:
+                render_ms = int((time.perf_counter() - t0) * 1000)
                 log.info("dispatcher: rendered via %s", adapter.name)
-                return text
-            log.warning(
-                "dispatcher: %s returned empty string, advancing", adapter.name
-            )
+                result = {
+                    "text": text,
+                    "provider": adapter.name,
+                    "fallback_fired": fallback_fired,
+                    "error_class": last_error_class if fallback_fired else None,
+                    "render_ms": render_ms,
+                }
+                record_provider_attempt(
+                    chain_order=chain_names,
+                    rendered_by=adapter.name,
+                    fallback_fired=fallback_fired,
+                    fallback_from=chain_names[0] if fallback_fired else None,
+                    fallback_to=adapter.name if fallback_fired else None,
+                    error_class=last_error_class,
+                )
+                return result
+            if not fallback_fired:
+                fallback_fired = True
+            log.warning("dispatcher: %s returned empty string, advancing", adapter.name)
         except QuotaExhausted as e:
-            log.warning("dispatcher: %s quota exhausted — %s", adapter.name, e)
+            if not fallback_fired:
+                fallback_fired = True
+                last_error_class = type(e).__name__
+            log.warning("dispatcher: %s quota exhausted", adapter.name)
             continue
         except TransientError as e:
-            log.warning("dispatcher: %s transient error — %s", adapter.name, e)
+            if not fallback_fired:
+                fallback_fired = True
+                last_error_class = type(e).__name__
+            log.warning("dispatcher: %s transient error", adapter.name)
             continue
 
+    render_ms = int((time.perf_counter() - t0) * 1000)
     log.error("dispatcher: all adapters exhausted — returning empty string")
-    return ""
+    result = {
+        "text": "",
+        "provider": "template",
+        "fallback_fired": True,
+        "error_class": last_error_class,
+        "render_ms": render_ms,
+    }
+    record_provider_attempt(
+        chain_order=chain_names,
+        rendered_by="template",
+        fallback_fired=True,
+        fallback_from=chain_names[0],
+        fallback_to="template",
+        error_class=last_error_class,
+    )
+    return result
 
 
 # TODO(test): mock gemini.render to raise QuotaExhausted on the first call

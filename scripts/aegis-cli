@@ -28,6 +28,779 @@ def _resolve_sock() -> str:
     return DEFAULTS[0]
 
 
+
+
+def _print_health() -> None:
+    """Print health report from direct state reads. No socket required."""
+    import json as _json
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt, timezone as _tz
+    import subprocess as _sp
+
+    sock_path = _Path("/run/aegis/aegis.sock")
+    sock_ok = sock_path.exists()
+    pid_out = ""
+    try:
+        pid_out = _sp.run(
+            ["pgrep", "-f", "python -m aegis.main"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.strip()
+    except Exception:
+        pass
+
+    state_dir = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis"))
+
+    print("aegis health:", "ok" if sock_ok else "degraded")
+    if pid_out:
+        print(f"daemon: pid {pid_out}, socket {'present' if sock_ok else 'MISSING'}")
+    else:
+        print(f"daemon: not found, socket {'present' if sock_ok else 'MISSING'}")
+
+    # Renderer state
+    rs_path = state_dir / "renderer_state.json"
+    if rs_path.exists():
+        try:
+            rs = _json.loads(rs_path.read_text())
+            chain = rs.get("chain", [])
+            ls = rs.get("last_success", {})
+            lf = rs.get("last_fallback")
+            gem = rs.get("providers", {}).get("gemini", {})
+            print(f"renderer: chain {' -> '.join(chain)}, last_success={ls.get('provider', '?')}")
+            used = gem.get("local_daily_used", "?")
+            budget = gem.get("local_daily_budget", "?")
+            window = gem.get("quota_window", "?")
+            print(f"quota: gemini {used}/{budget}, window {window}")
+            if lf:
+                print(f"last_fallback: {lf.get('from')} -> {lf.get('to')} ({lf.get('reason')})")
+        except Exception as e:
+            print(f"renderer: error reading state — {e}")
+    else:
+        print("renderer: unknown (state file missing)")
+
+    # Memory
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            total = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            seeds = conn.execute("SELECT COUNT(*) FROM episodes WHERE action='seed'").fetchone()[0]
+            conn.close()
+            print(f"memory: {total} episodes, {seeds} seed rows")
+        except Exception as e:
+            print(f"memory: error — {e}")
+    else:
+        print("memory: unknown (db missing)")
+
+    # Neurobus
+    nb_path = state_dir / "neurobus_state.json"
+    if nb_path.exists():
+        try:
+            nb = _json.loads(nb_path.read_text())
+            print(f"neurobus: reward={nb.get('reward',0):.2f} novelty={nb.get('novelty',0):.2f} attention={nb.get('attention',0):.2f} patience={nb.get('patience',0):.2f} threat={nb.get('threat',0):.2f} trust={nb.get('trust',0):.2f}")
+        except Exception as e:
+            print(f"neurobus: error — {e}")
+    else:
+        print("neurobus: unknown (state file missing)")
+
+    # Turns
+    turns_path = state_dir / "turns.jsonl"
+    if turns_path.exists():
+        try:
+            lines = turns_path.read_text().strip().splitlines()
+            last = lines[-1] if lines else None
+            total = len(lines)
+            if last:
+                row = _json.loads(last)
+                print(f"turns: {total} total, last provider={row.get('provider','?')} total_ms={row.get('render_ms','?')} fallback={row.get('fallback_fired','?')}")
+        except Exception as e:
+            print(f"turns: error — {e}")
+    else:
+        print("turns: none yet")
+
+
+def _print_neurobus() -> None:
+    """Print latest neurobus state from disk."""
+    import json as _json
+    from pathlib import Path as _Path
+    nb_path = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis")) / "neurobus_state.json"
+    if not nb_path.exists():
+        print("neurobus: unknown (state file missing)")
+        return
+    try:
+        nb = _json.loads(nb_path.read_text())
+        print(f"reward   {nb.get('reward', 0):.4f}")
+        print(f"novelty  {nb.get('novelty', 0):.4f}")
+        print(f"attention{nb.get('attention', 0):.4f}")
+        print(f"patience {nb.get('patience', 0):.4f}")
+        print(f"threat   {nb.get('threat', 0):.4f}")
+        print(f"trust    {nb.get('trust', 0):.4f}")
+        print(f"updated  {nb.get('updated_at', '?')}")
+    except Exception as e:
+        print(f"neurobus: error — {e}")
+
+
+def _print_mem(n: int) -> None:
+    """Print recent Mnemosyne rows, no embeddings."""
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt, timezone as _tz
+    import sqlite3
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if not db_path.exists():
+        print("memory: unknown (db missing)")
+        return
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    rows = conn.execute(
+        "SELECT id, ts, action, text FROM episodes ORDER BY id DESC LIMIT ?",
+        (n,),
+    ).fetchall()
+    conn.close()
+    ts = lambda t: _dt.fromtimestamp(t, tz=_tz.utc).isoformat() if t else "?"
+    label = lambda a: "seed" if a == "seed" else ("AEGIS" if a == "speak" else "USER")
+    for _id, _ts, action, text in reversed(rows):
+        print(f"#{_id} {label(action)} {ts(_ts)} {text[:120]}")
+
+
+def _print_health() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    import subprocess as _sp
+
+    sock_path = _Path("/run/aegis/aegis.sock")
+    sock_ok = sock_path.exists()
+    pid_out = ""
+    try:
+        pid_out = _sp.run(
+            ["pgrep", "-f", "python -m aegis.main"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.strip()
+    except Exception:
+        pass
+
+    state_dir = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis"))
+
+    print("aegis health:", "ok" if sock_ok else "degraded")
+    if pid_out:
+        print(f"daemon: pid {pid_out}, socket {'present' if sock_ok else 'MISSING'}")
+    else:
+        print(f"daemon: not found, socket {'present' if sock_ok else 'MISSING'}")
+
+    rs_path = state_dir / "renderer_state.json"
+    if rs_path.exists():
+        try:
+            rs = _json.loads(rs_path.read_text())
+            chain = rs.get("chain", [])
+            ls = rs.get("last_success", {})
+            lf = rs.get("last_fallback")
+            gem = rs.get("providers", {}).get("gemini", {})
+            print(f"renderer: chain {' -> '.join(chain)}, last_success={ls.get('provider', '?')}")
+            used = gem.get("local_daily_used", "?")
+            budget = gem.get("local_daily_budget", "?")
+            print(f"quota: gemini {used}/{budget}")
+            if lf:
+                print(f"last_fallback: {lf.get('from')} -> {lf.get('to')} ({lf.get('reason')})")
+        except Exception as e:
+            print(f"renderer: error — {e}")
+    else:
+        print("renderer: unknown")
+
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            total = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            seeds = conn.execute("SELECT COUNT(*) FROM episodes WHERE action='seed'").fetchone()[0]
+            conn.close()
+            print(f"memory: {total} episodes, {seeds} seed rows")
+        except Exception as e:
+            print(f"memory: error — {e}")
+    else:
+        print("memory: unknown")
+
+    nb_path = state_dir / "neurobus_state.json"
+    if nb_path.exists():
+        try:
+            nb = _json.loads(nb_path.read_text())
+            print(f"neurobus: reward={nb.get('reward',0):.2f} novelty={nb.get('novelty',0):.2f} attention={nb.get('attention',0):.2f} patience={nb.get('patience',0):.2f} threat={nb.get('threat',0):.2f} trust={nb.get('trust',0):.2f}")
+        except Exception as e:
+            print(f"neurobus: error — {e}")
+    else:
+        print("neurobus: unknown")
+
+    turns_path = state_dir / "turns.jsonl"
+    if turns_path.exists():
+        try:
+            result = _sp.run(
+                ["tail", "-3", str(turns_path)],
+                capture_output=True, text=True, timeout=2,
+            )
+            lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
+            if lines:
+                last = _json.loads(lines[-1])
+                print(f"turns: last provider={last.get('provider','?')} render_ms={last.get('render_ms','?')} total_ms={last.get('total_ms','?')} fallback={last.get('fallback_fired','?')}")
+            else:
+                print("turns: empty")
+        except Exception as e:
+            print(f"turns: error — {e}")
+    else:
+        print("turns: none yet")
+
+
+def _print_neurobus() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    nb_path = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis")) / "neurobus_state.json"
+    if not nb_path.exists():
+        print("neurobus: unknown (state file missing)")
+        return
+    try:
+        nb = _json.loads(nb_path.read_text())
+        print(f"reward   {nb.get('reward', 0):.4f}")
+        print(f"novelty  {nb.get('novelty', 0):.4f}")
+        print(f"attention{nb.get('attention', 0):.4f}")
+        print(f"patience {nb.get('patience', 0):.4f}")
+        print(f"threat   {nb.get('threat', 0):.4f}")
+        print(f"trust    {nb.get('trust', 0):.4f}")
+        print(f"updated  {nb.get('updated_at', '?')}")
+    except Exception as e:
+        print(f"neurobus: error — {e}")
+
+
+def _print_mem(n: int) -> None:
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt, timezone as _tz
+    import sqlite3
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if not db_path.exists():
+        print("memory: unknown (db missing)")
+        return
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    rows = conn.execute(
+        "SELECT id, ts, action, text FROM episodes ORDER BY id DESC LIMIT ?",
+        (n,),
+    ).fetchall()
+    conn.close()
+    ts = lambda t: _dt.fromtimestamp(t, tz=_tz.utc).isoformat() if t else "?"
+    label = lambda a: "seed" if a == "seed" else ("AEGIS" if a == "speak" else "USER")
+    for _id, _ts, action, text in reversed(rows):
+        print(f"#{_id} {label(action)} {ts(_ts)} {text[:120]}")
+
+
+def _print_health() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    import subprocess as _sp
+
+    sock_path = _Path("/run/aegis/aegis.sock")
+    sock_ok = sock_path.exists()
+    pid_out = ""
+    try:
+        pid_out = _sp.run(["pgrep", "-f", "python -m aegis.main"], capture_output=True, text=True, timeout=2).stdout.strip()
+    except Exception:
+        pass
+
+    state_dir = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis"))
+    print("aegis health:", "ok" if sock_ok else "degraded")
+    print(f"daemon: {'pid ' + pid_out if pid_out else 'not found'}, socket {'present' if sock_ok else 'MISSING'}")
+
+    rs_path = state_dir / "renderer_state.json"
+    if rs_path.exists():
+        try:
+            rs = _json.loads(rs_path.read_text())
+            chain = rs.get("chain", [])
+            ls = rs.get("last_success", {})
+            lf = rs.get("last_fallback")
+            gem = rs.get("providers", {}).get("gemini", {})
+            print(f"renderer: chain {' -> '.join(chain)}, last_success={ls.get('provider', '?')}")
+            print(f"quota: gemini {gem.get('local_daily_used','?')}/{gem.get('local_daily_budget','?')}")
+            if lf:
+                print(f"last_fallback: {lf.get('from')} -> {lf.get('to')} ({lf.get('reason')})")
+        except Exception as e:
+            print(f"renderer: error — {e}")
+    else:
+        print("renderer: unknown")
+
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            total = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            seeds = conn.execute("SELECT COUNT(*) FROM episodes WHERE action='seed'").fetchone()[0]
+            conn.close()
+            print(f"memory: {total} episodes, {seeds} seed rows")
+        except Exception as e:
+            print(f"memory: error — {e}")
+    else:
+        print("memory: unknown")
+
+    nb_path = state_dir / "neurobus_state.json"
+    if nb_path.exists():
+        try:
+            nb = _json.loads(nb_path.read_text())
+            print(f"neurobus: reward={nb.get('reward',0):.2f} novelty={nb.get('novelty',0):.2f} attention={nb.get('attention',0):.2f} patience={nb.get('patience',0):.2f} threat={nb.get('threat',0):.2f} trust={nb.get('trust',0):.2f}")
+        except Exception as e:
+            print(f"neurobus: error — {e}")
+    else:
+        print("neurobus: unknown")
+
+    turns_path = state_dir / "turns.jsonl"
+    if turns_path.exists():
+        try:
+            result = _sp.run(["tail", "-1", str(turns_path)], capture_output=True, text=True, timeout=2)
+            if result.stdout.strip():
+                row = _json.loads(result.stdout.strip())
+                print(f"turns: last provider={row.get('provider','?')} render_ms={row.get('render_ms','?')} total_ms={row.get('total_ms','?')} fallback={row.get('fallback_fired','?')}")
+            else:
+                print("turns: empty")
+        except Exception as e:
+            print(f"turns: error — {e}")
+    else:
+        print("turns: none yet")
+
+
+def _print_neurobus() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    nb_path = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis")) / "neurobus_state.json"
+    if not nb_path.exists():
+        print("neurobus: unknown (state file missing)")
+        return
+    try:
+        nb = _json.loads(nb_path.read_text())
+        for k in ["reward", "novelty", "attention", "patience", "threat", "trust"]:
+            print(f"{k:<10} {nb.get(k, 0):.4f}")
+        print(f"{'updated':<10} {nb.get('updated_at', '?')}")
+    except Exception as e:
+        print(f"neurobus: error — {e}")
+
+
+def _print_mem(n: int) -> None:
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt, timezone as _tz
+    import sqlite3
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if not db_path.exists():
+        print("memory: unknown (db missing)")
+        return
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    rows = conn.execute("SELECT id, ts, action, text FROM episodes ORDER BY id DESC LIMIT ?", (n,)).fetchall()
+    conn.close()
+    ts = lambda t: _dt.fromtimestamp(t, tz=_tz.utc).isoformat() if t else "?"
+    label = lambda a: "seed" if a == "seed" else ("AEGIS" if a == "speak" else "USER")
+    for _id, _ts, action, text in reversed(rows):
+        print(f"#{_id} {label(action)} {ts(_ts)} {text[:120]}")
+
+# B2 observability flags — parse before socket connection.
+import sys as _sys
+_args = [a for a in _sys.argv[1:] if not a.startswith("-")]
+_flags = [a for a in _sys.argv[1:] if a.startswith("-")]
+
+if "--health" in _flags:
+    _print_health()
+    _sys.exit(0)
+if "--neurobus" in _flags:
+    _print_neurobus()
+    _sys.exit(0)
+if any(f.startswith("--mem") for f in _flags):
+    _mem_flag = next((f for f in _flags if f.startswith("--mem")), None)
+    _n = 10
+    if _mem_flag and "=" in _mem_flag:
+        _n = int(_mem_flag.split("=", 1)[1])
+    elif _mem_flag:
+        idx = _sys.argv.index(_mem_flag)
+        if idx + 1 < len(_sys.argv):
+            _n = int(_sys.argv[idx + 1])
+    _print_mem(_n)
+    _sys.exit(0)
+
+
+
+def _print_health() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    import subprocess as _sp
+
+    sock_path = _Path("/run/aegis/aegis.sock")
+    sock_ok = sock_path.exists()
+    pid_out = ""
+    try:
+        pid_out = _sp.run(
+            ["pgrep", "-f", "python -m aegis.main"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.strip()
+    except Exception:
+        pass
+
+    state_dir = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis"))
+
+    print("aegis health:", "ok" if sock_ok else "degraded")
+    if pid_out:
+        print(f"daemon: pid {pid_out}, socket {'present' if sock_ok else 'MISSING'}")
+    else:
+        print(f"daemon: not found, socket {'present' if sock_ok else 'MISSING'}")
+
+    rs_path = state_dir / "renderer_state.json"
+    if rs_path.exists():
+        try:
+            rs = _json.loads(rs_path.read_text())
+            chain = rs.get("chain", [])
+            ls = rs.get("last_success", {})
+            lf = rs.get("last_fallback")
+            gem = rs.get("providers", {}).get("gemini", {})
+            print(f"renderer: chain {' -> '.join(chain)}, last_success={ls.get('provider', '?')}")
+            used = gem.get("local_daily_used", "?")
+            budget = gem.get("local_daily_budget", "?")
+            print(f"quota: gemini {used}/{budget}")
+            if lf:
+                print(f"last_fallback: {lf.get('from')} -> {lf.get('to')} ({lf.get('reason')})")
+        except Exception as e:
+            print(f"renderer: error — {e}")
+    else:
+        print("renderer: unknown")
+
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            total = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            seeds = conn.execute("SELECT COUNT(*) FROM episodes WHERE action='seed'").fetchone()[0]
+            conn.close()
+            print(f"memory: {total} episodes, {seeds} seed rows")
+        except Exception as e:
+            print(f"memory: error — {e}")
+    else:
+        print("memory: unknown")
+
+    nb_path = state_dir / "neurobus_state.json"
+    if nb_path.exists():
+        try:
+            nb = _json.loads(nb_path.read_text())
+            print(f"neurobus: reward={nb.get('reward',0):.2f} novelty={nb.get('novelty',0):.2f} attention={nb.get('attention',0):.2f} patience={nb.get('patience',0):.2f} threat={nb.get('threat',0):.2f} trust={nb.get('trust',0):.2f}")
+        except Exception as e:
+            print(f"neurobus: error — {e}")
+    else:
+        print("neurobus: unknown")
+
+    turns_path = state_dir / "turns.jsonl"
+    if turns_path.exists():
+        try:
+            result = _sp.run(
+                ["tail", "-3", str(turns_path)],
+                capture_output=True, text=True, timeout=2,
+            )
+            lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
+            if lines:
+                last = _json.loads(lines[-1])
+                print(f"turns: last provider={last.get('provider','?')} render_ms={last.get('render_ms','?')} total_ms={last.get('total_ms','?')} fallback={last.get('fallback_fired','?')}")
+            else:
+                print("turns: empty")
+        except Exception as e:
+            print(f"turns: error — {e}")
+    else:
+        print("turns: none yet")
+
+
+def _print_neurobus() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    nb_path = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis")) / "neurobus_state.json"
+    if not nb_path.exists():
+        print("neurobus: unknown (state file missing)")
+        return
+    try:
+        nb = _json.loads(nb_path.read_text())
+        print(f"reward   {nb.get('reward', 0):.4f}")
+        print(f"novelty  {nb.get('novelty', 0):.4f}")
+        print(f"attention{nb.get('attention', 0):.4f}")
+        print(f"patience {nb.get('patience', 0):.4f}")
+        print(f"threat   {nb.get('threat', 0):.4f}")
+        print(f"trust    {nb.get('trust', 0):.4f}")
+        print(f"updated  {nb.get('updated_at', '?')}")
+    except Exception as e:
+        print(f"neurobus: error — {e}")
+
+
+def _print_mem(n: int) -> None:
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt, timezone as _tz
+    import sqlite3
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if not db_path.exists():
+        print("memory: unknown (db missing)")
+        return
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    rows = conn.execute(
+        "SELECT id, ts, action, text FROM episodes ORDER BY id DESC LIMIT ?",
+        (n,),
+    ).fetchall()
+    conn.close()
+    ts = lambda t: _dt.fromtimestamp(t, tz=_tz.utc).isoformat() if t else "?"
+    label = lambda a: "seed" if a == "seed" else ("AEGIS" if a == "speak" else "USER")
+    for _id, _ts, action, text in reversed(rows):
+        print(f"#{_id} {label(action)} {ts(_ts)} {text[:120]}")
+
+
+def _print_health() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    import subprocess as _sp
+
+    sock_path = _Path("/run/aegis/aegis.sock")
+    sock_ok = sock_path.exists()
+    pid_out = ""
+    try:
+        pid_out = _sp.run(["pgrep", "-f", "python -m aegis.main"], capture_output=True, text=True, timeout=2).stdout.strip()
+    except Exception:
+        pass
+
+    state_dir = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis"))
+    print("aegis health:", "ok" if sock_ok else "degraded")
+    print(f"daemon: {'pid ' + pid_out if pid_out else 'not found'}, socket {'present' if sock_ok else 'MISSING'}")
+
+    rs_path = state_dir / "renderer_state.json"
+    if rs_path.exists():
+        try:
+            rs = _json.loads(rs_path.read_text())
+            chain = rs.get("chain", [])
+            ls = rs.get("last_success", {})
+            lf = rs.get("last_fallback")
+            gem = rs.get("providers", {}).get("gemini", {})
+            print(f"renderer: chain {' -> '.join(chain)}, last_success={ls.get('provider', '?')}")
+            print(f"quota: gemini {gem.get('local_daily_used','?')}/{gem.get('local_daily_budget','?')}")
+            if lf:
+                print(f"last_fallback: {lf.get('from')} -> {lf.get('to')} ({lf.get('reason')})")
+        except Exception as e:
+            print(f"renderer: error — {e}")
+    else:
+        print("renderer: unknown")
+
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            total = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            seeds = conn.execute("SELECT COUNT(*) FROM episodes WHERE action='seed'").fetchone()[0]
+            conn.close()
+            print(f"memory: {total} episodes, {seeds} seed rows")
+        except Exception as e:
+            print(f"memory: error — {e}")
+    else:
+        print("memory: unknown")
+
+    nb_path = state_dir / "neurobus_state.json"
+    if nb_path.exists():
+        try:
+            nb = _json.loads(nb_path.read_text())
+            print(f"neurobus: reward={nb.get('reward',0):.2f} novelty={nb.get('novelty',0):.2f} attention={nb.get('attention',0):.2f} patience={nb.get('patience',0):.2f} threat={nb.get('threat',0):.2f} trust={nb.get('trust',0):.2f}")
+        except Exception as e:
+            print(f"neurobus: error — {e}")
+    else:
+        print("neurobus: unknown")
+
+    turns_path = state_dir / "turns.jsonl"
+    if turns_path.exists():
+        try:
+            result = _sp.run(["tail", "-1", str(turns_path)], capture_output=True, text=True, timeout=2)
+            if result.stdout.strip():
+                row = _json.loads(result.stdout.strip())
+                print(f"turns: last provider={row.get('provider','?')} render_ms={row.get('render_ms','?')} total_ms={row.get('total_ms','?')} fallback={row.get('fallback_fired','?')}")
+            else:
+                print("turns: empty")
+        except Exception as e:
+            print(f"turns: error — {e}")
+    else:
+        print("turns: none yet")
+
+
+def _print_neurobus() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    nb_path = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis")) / "neurobus_state.json"
+    if not nb_path.exists():
+        print("neurobus: unknown (state file missing)")
+        return
+    try:
+        nb = _json.loads(nb_path.read_text())
+        for k in ["reward", "novelty", "attention", "patience", "threat", "trust"]:
+            print(f"{k:<10} {nb.get(k, 0):.4f}")
+        print(f"{'updated':<10} {nb.get('updated_at', '?')}")
+    except Exception as e:
+        print(f"neurobus: error — {e}")
+
+
+def _print_mem(n: int) -> None:
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt, timezone as _tz
+    import sqlite3
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if not db_path.exists():
+        print("memory: unknown (db missing)")
+        return
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    rows = conn.execute("SELECT id, ts, action, text FROM episodes ORDER BY id DESC LIMIT ?", (n,)).fetchall()
+    conn.close()
+    ts = lambda t: _dt.fromtimestamp(t, tz=_tz.utc).isoformat() if t else "?"
+    label = lambda a: "seed" if a == "seed" else ("AEGIS" if a == "speak" else "USER")
+    for _id, _ts, action, text in reversed(rows):
+        print(f"#{_id} {label(action)} {ts(_ts)} {text[:120]}")
+
+# B2 observability flags — parse before socket connection.
+import sys as _sys
+_args = [a for a in _sys.argv[1:] if not a.startswith("-")]
+_flags = [a for a in _sys.argv[1:] if a.startswith("-")]
+
+if "--health" in _flags:
+    _print_health()
+    _sys.exit(0)
+if "--neurobus" in _flags:
+    _print_neurobus()
+    _sys.exit(0)
+if any(f.startswith("--mem") for f in _flags):
+    _mem_flag = next((f for f in _flags if f.startswith("--mem")), None)
+    _n = 10
+    if _mem_flag and "=" in _mem_flag:
+        _n = int(_mem_flag.split("=", 1)[1])
+    elif _mem_flag:
+        idx = _sys.argv.index(_mem_flag)
+        if idx + 1 < len(_sys.argv):
+            _n = int(_sys.argv[idx + 1])
+    _print_mem(_n)
+    _sys.exit(0)
+
+
+
+def _print_health() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    import subprocess as _sp
+
+    sock_path = _Path("/run/aegis/aegis.sock")
+    sock_ok = sock_path.exists()
+    pid_out = ""
+    try:
+        pid_out = _sp.run(["pgrep", "-f", "python -m aegis.main"], capture_output=True, text=True, timeout=2).stdout.strip()
+    except Exception:
+        pass
+
+    state_dir = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis"))
+    print("aegis health:", "ok" if sock_ok else "degraded")
+    print(f"daemon: {'pid ' + pid_out if pid_out else 'not found'}, socket {'present' if sock_ok else 'MISSING'}")
+
+    rs_path = state_dir / "renderer_state.json"
+    if rs_path.exists():
+        try:
+            rs = _json.loads(rs_path.read_text())
+            chain = rs.get("chain", [])
+            ls = rs.get("last_success", {})
+            lf = rs.get("last_fallback")
+            gem = rs.get("providers", {}).get("gemini", {})
+            print(f"renderer: chain {' -> '.join(chain)}, last_success={ls.get('provider', '?')}")
+            print(f"quota: gemini {gem.get('local_daily_used','?')}/{gem.get('local_daily_budget','?')}")
+            if lf:
+                print(f"last_fallback: {lf.get('from')} -> {lf.get('to')} ({lf.get('reason')})")
+        except Exception as e:
+            print(f"renderer: error — {e}")
+    else:
+        print("renderer: unknown")
+
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            total = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            seeds = conn.execute("SELECT COUNT(*) FROM episodes WHERE action='seed'").fetchone()[0]
+            conn.close()
+            print(f"memory: {total} episodes, {seeds} seed rows")
+        except Exception as e:
+            print(f"memory: error — {e}")
+    else:
+        print("memory: unknown")
+
+    nb_path = state_dir / "neurobus_state.json"
+    if nb_path.exists():
+        try:
+            nb = _json.loads(nb_path.read_text())
+            print(f"neurobus: reward={nb.get('reward',0):.2f} novelty={nb.get('novelty',0):.2f} attention={nb.get('attention',0):.2f} patience={nb.get('patience',0):.2f} threat={nb.get('threat',0):.2f} trust={nb.get('trust',0):.2f}")
+        except Exception as e:
+            print(f"neurobus: error — {e}")
+    else:
+        print("neurobus: unknown")
+
+    turns_path = state_dir / "turns.jsonl"
+    if turns_path.exists():
+        try:
+            result = _sp.run(["tail", "-1", str(turns_path)], capture_output=True, text=True, timeout=2)
+            if result.stdout.strip():
+                row = _json.loads(result.stdout.strip())
+                print(f"turns: last provider={row.get('provider','?')} render_ms={row.get('render_ms','?')} total_ms={row.get('total_ms','?')} fallback={row.get('fallback_fired','?')}")
+            else:
+                print("turns: empty")
+        except Exception as e:
+            print(f"turns: error — {e}")
+    else:
+        print("turns: none yet")
+
+
+def _print_neurobus() -> None:
+    import json as _json
+    from pathlib import Path as _Path
+    nb_path = _Path(os.getenv("AEGIS_STATE_DIR", "/var/lib/aegis")) / "neurobus_state.json"
+    if not nb_path.exists():
+        print("neurobus: unknown (state file missing)")
+        return
+    try:
+        nb = _json.loads(nb_path.read_text())
+        for k in ["reward", "novelty", "attention", "patience", "threat", "trust"]:
+            print(f"{k:<10} {nb.get(k, 0):.4f}")
+        print(f"{'updated':<10} {nb.get('updated_at', '?')}")
+    except Exception as e:
+        print(f"neurobus: error — {e}")
+
+
+def _print_mem(n: int) -> None:
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt, timezone as _tz
+    import sqlite3
+    db_path = _Path.home() / ".local" / "share" / "aegis" / "mnemosyne.db"
+    if not db_path.exists():
+        print("memory: unknown (db missing)")
+        return
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    rows = conn.execute("SELECT id, ts, action, text FROM episodes ORDER BY id DESC LIMIT ?", (n,)).fetchall()
+    conn.close()
+    ts = lambda t: _dt.fromtimestamp(t, tz=_tz.utc).isoformat() if t else "?"
+    label = lambda a: "seed" if a == "seed" else ("AEGIS" if a == "speak" else "USER")
+    for _id, _ts, action, text in reversed(rows):
+        print(f"#{_id} {label(action)} {ts(_ts)} {text[:120]}")
+
+# B2 observability flags — parse before socket connection.
+import sys as _sys
+_args = [a for a in _sys.argv[1:] if not a.startswith("-")]
+_flags = [a for a in _sys.argv[1:] if a.startswith("-")]
+
+if "--health" in _flags:
+    _print_health()
+    _sys.exit(0)
+if "--neurobus" in _flags:
+    _print_neurobus()
+    _sys.exit(0)
+if any(f.startswith("--mem") for f in _flags):
+    _mem_flag = next((f for f in _flags if f.startswith("--mem")), None)
+    _n = 10
+    if _mem_flag and "=" in _mem_flag:
+        _n = int(_mem_flag.split("=", 1)[1])
+    elif _mem_flag:
+        idx = _sys.argv.index(_mem_flag)
+        if idx + 1 < len(_sys.argv):
+            _n = int(_sys.argv[idx + 1])
+    _print_mem(_n)
+    _sys.exit(0)
+
 SOCK = _resolve_sock()
 
 try:
