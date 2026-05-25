@@ -41,7 +41,8 @@ CONN = get_conn()
 SEED_FACTS = [
     "you are running on helios1, a 16 GB no-GPU GCP VM in europe-west.",
     "helios1 is your only home for now; there is no second instance.",
-    "your operator's name is navpreet and he lives in berlin.",
+    "your operator's name is navpreet; he lives in magdeburg, germany.",
+    "you cap your own gemini api usage at 240 calls per UTC day. this is a hard self-imposed limit; you refuse to render via gemini after the 240th call and fall back to the template renderer until the UTC date rolls over.",
 ]
 
 _NEUTRAL_NEURO = json.dumps({
