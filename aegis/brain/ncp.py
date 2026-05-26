@@ -55,6 +55,18 @@ class NCPBrain(nn.Module):
 
 
 BRAIN = NCPBrain().eval()
+
+def hidden_state_vec() -> list[float]:
+    """Return the NCP's current hidden state h(t) as a flat list.
+
+    64-dim float, or empty list if no forward pass has occurred yet.
+    Exposed for the /state WebSocket — drives the orb's hidden-state heatmap core.
+    """
+    if BRAIN.hx is None:
+        return []
+    # hx can be a tuple or single tensor depending on ncps version
+    h = BRAIN.hx[0] if isinstance(BRAIN.hx, tuple) else BRAIN.hx
+    return h.squeeze().tolist()
 WM: deque[list[float]] = deque(maxlen=WM_SLOTS)
 LAST_ACTION_EMB = [0.0] * ACTION_EMB_DIM
 CONTEXT_TEXTS: list[str] = []

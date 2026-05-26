@@ -19,6 +19,15 @@ from aegis.nexus.neurobus import STATE as NEURO_STATE
 from .db import CONN
 
 log = logging.getLogger("mnemosyne.write")
+
+# B2/Orb: simple event queue for visual feedback.
+_EVENT_QUEUE: list[dict] = []
+
+def pop_last_event() -> dict | None:
+    """Pop the oldest pending mnemosyne event, or None."""
+    if _EVENT_QUEUE:
+        return _EVENT_QUEUE.pop(0)
+    return None
 WRITE_THRESHOLD = 0.3
 
 
@@ -47,6 +56,7 @@ async def run() -> None:
                  None),
             )
             CONN.commit()
+            _EVENT_QUEUE.append({"tier": "T1", "op": "write", "ts": time.time()})
             log.debug("stored user turn")
 
     async def consume_speak() -> None:

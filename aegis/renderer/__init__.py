@@ -5,6 +5,13 @@ the CHAIN catching these and trying the next tier.
 """
 
 
+
+# Orb Phase 0: flag raised when any renderer adapter is actively producing speech.
+_is_speaking = False
+
+def is_speaking() -> bool:
+    return _is_speaking
+
 class RendererError(Exception):
     """Base for all renderer-tier errors. Catch this if you want to fall back
     to the template renderer for any reason."""
