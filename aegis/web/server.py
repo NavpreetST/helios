@@ -55,8 +55,17 @@ def _build_state() -> dict:
             "is_speaking": False,
             "mnemosyne_event": None,
         }
+    # orb_state.json writes NeuroBus scalars as flat top-level keys.
+    neurobus = {
+        "reward": orb.get("reward", 0),
+        "novelty": orb.get("novelty", 0),
+        "attention": orb.get("attention", 0.5),
+        "patience": orb.get("patience", 0.5),
+        "threat": orb.get("threat", 0),
+        "trust": orb.get("trust", 0.5),
+    } if "reward" in orb else orb.get("neurobus", {})
     return {
-        "neurobus": orb.get("neurobus", {}),
+        "neurobus": neurobus,
         "h": orb.get("h", []),
         "is_speaking": orb.get("is_speaking", False),
         "mnemosyne_event": orb.get("mnemosyne_event"),
